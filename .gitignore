@@ -1,0 +1,25 @@
+# Biometric dataset and local data
+/data/
+/database/
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated artifacts
+/work/
+/models/
+/outputs/
+*.pt
+*.pth
+*.ckpt
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local environment
+.env
+.env.*
+!.env.example
