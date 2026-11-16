@@ -1,11 +1,20 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from irisguard.dataset_inspector import discover_dataset_root
+
+
+def _default_data_root() -> Path:
+    discovered = discover_dataset_root()
+    if discovered is not None:
+        return discovered
+    return Path("data/CASIA-Iris-Thousand")
+
 
 @dataclass
 class Config:
     # ----- paths -----
-    data_root: Path = Path("data/CASIA-Iris-Thousand")
+    data_root: Path = _default_data_root()
     work_dir: Path = Path("work")
     models_dir: Path = Path("models")
     ckpt_dir: Path = Path("models/checkpoints")
