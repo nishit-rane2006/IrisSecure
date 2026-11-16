@@ -1,6 +1,7 @@
 import numpy as np
 
 from irisguard.afsdd import AFSDD, AFSDDConfig
+from irisguard.dataset_inspector import discover_dataset_root, inspect_dataset, write_manifest_and_statistics
 from irisguard.research import run_experiment_suite
 from irisguard.template_manager import (
     IrisGuardPolicy,
@@ -62,6 +63,21 @@ def test_rollback_restores_previous_version():
     rollback = mgr.rollback("user4", version=1)
     assert rollback["rolled_back"] is True
     assert mgr.get_record("user4").current_version == 1
+
+
+def test_dataset_root_discovery_finds_uploaded_casia_data():
+    root = discover_dataset_root()
+    assert root is not None
+    assert "IrisSecure-Dataset" in str(root) or "CASIA-Iris-Thousand" in str(root)
+
+
+def test_dataset_manifest_generation_creates_manifest_and_stats():
+    manifest_path, stats_path, df, stats = write_manifest_and_statistics()
+    assert manifest_path.exists()
+    assert stats_path.exists()
+    assert not df.empty
+    assert stats["subjects"] > 0
+    assert stats["valid_images"] > 0
 
 
 def test_experiment_suite_produces_expected_summary():

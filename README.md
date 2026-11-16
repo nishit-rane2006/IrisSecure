@@ -4,7 +4,7 @@ This repository preserves the original IrisSecure baseline for deep iris biometr
 
 The baseline remains useful for recognition, registration, verification, and evaluation on CASIA-Iris-Thousand. The IrisGuard layer introduces immutable enrollment references, adaptive template management, AFSDD drift detection, and synthetic attack experiments.
 
-The dataset and generated biometric artifacts are not included in this repository. Obtain the dataset from its authorized source and follow its terms before use.
+The dataset and generated biometric artifacts are not included in this repository. Obtain CASIA-Iris-Thousand from its authorized source and follow its access and usage terms. Keep the dataset local; the repository ignores the `IrisSecure-Dataset/` folder.
 
 ## Baseline setup
 
@@ -15,7 +15,42 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 pip install -r requirements.txt
 ```
 
-Place the CASIA-Iris-Thousand dataset under `dataset/CASIA-Iris-Thousand/...` (or `data/CASIA-Iris-Thousand/...` if you prefer to mirror the default config) and then run:
+### Configure the local dataset
+
+Put the authorized dataset inside the project directory using either of these layouts:
+
+```text
+IrisSecure-Dataset/
+└── CASIA-Iris-Thousand/
+    └── <subject_id>/
+        ├── L/
+        └── R/
+```
+
+or, if the archive contains a duplicate nested directory:
+
+```text
+IrisSecure-Dataset/
+└── CASIA-Iris-Thousand/
+    └── CASIA-Iris-Thousand/
+        └── <subject_id>/
+            ├── L/
+            └── R/
+```
+
+The loader searches for `IrisSecure-Dataset/` or `CASIA-Iris-Thousand/` and handles the nested layout. Left and right eyes are treated as separate identities. Do not rename or move the original image files. If the data is stored elsewhere, set `Config.data_root` in `config.py` to its actual subject-folder root.
+
+Generate the dataset manifest and observed statistics without starting training:
+
+```bash
+python -c "from irisguard.dataset_inspector import write_manifest_and_statistics; print(write_manifest_and_statistics()[:2])"
+```
+
+This writes `data/processed/dataset_manifest.csv` and `data/processed/dataset_statistics.json`. These generated files contain paths and image metadata, not copies of the images. If discovery fails, verify the folder layout above or configure `data_root`.
+
+### Run the baseline pipeline
+
+After setting up the dataset, start the training and evaluation pipeline:
 
 ```bash
 python pipeline.py

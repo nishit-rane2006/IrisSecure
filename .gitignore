@@ -1,4 +1,5 @@
 # Biometric dataset and local data
+/IrisSecure-Dataset/
 /data/
 /database/
 *.db
