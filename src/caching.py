@@ -106,7 +106,8 @@ def stage(name: str, inputs_fn: Callable[[], str], outputs_fn: Callable[[], List
         def wrapper(*args, force: bool = False, **kwargs):
             t0 = time.time()
             idx = load_hash_index()
-            current_hash = inputs_fn()
+            input_hash = inputs_fn()
+            current_hash = hash_obj({"inputs": input_hash, "parameters": kwargs}) if kwargs else input_hash
 
             outputs = outputs_fn()
             outputs_exist = len(outputs) > 0 and all(p.exists() for p in outputs)

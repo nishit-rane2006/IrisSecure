@@ -17,7 +17,7 @@ from config import CFG
 from src.dataset import IrisDataset, build_eval_transform, build_train_transform, preprocess_iris
 from src.metrics import compute_biometric_metrics
 from src.model import IrisEmbeddingNet
-from src.utils import EMA, get_device, optimize_cpu_runtime, save_json, set_seed
+from src.utils import EMA, save_json, set_seed
 
 
 # ======================================================================
@@ -232,19 +232,40 @@ def _build_optimizer(model, cfg, phase):
     )
 
 
-def train_impl(out_dir: Path, epochs: int = None, batch_size: int = None, grad_accum: int = None, num_workers: int = None, max_classes: int = None):
-    epochs = epochs or CFG.epochs
-    batch_size = batch_size or CFG.batch_size
-    grad_accum = grad_accum or CFG.grad_accum_steps
-    num_workers = num_workers if num_workers is not None else CFG.num_workers
+def train_impl(
+    out_dir: Path,
+    epochs: int = None,
+    batch_size: int = None,
+    grad_accum: int = None,
+    num_workers: int = None,
+    max_classes: int = None,
+    early_stopping_patience: int = None,
+):
+    from config.hardware_config import configure_torch, resource_plan, torch_device
+
+    hardware = configure_torch()
+    plan = resource_plan(hardware)
+    epochs = epochs if epochs is not None else CFG.epochs
+    batch_size = batch_size if batch_size is not None else plan.training_batch_size
+    grad_accum = grad_accum if grad_accum is not None else plan.gradient_accumulation_steps
+    num_workers = num_workers if num_workers is not None else plan.dataloader_workers
+    num_workers = min(max(0, int(num_workers)), max(0, hardware.logical_processors - 1))
     max_classes = max_classes if max_classes is not None else CFG.max_classes
+    early_stopping_patience = (
+        early_stopping_patience
+        if early_stopping_patience is not None
+        else CFG.early_stopping_patience
+    )
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = out_dir / "best_model.pth"
+    if checkpoint_path.exists():
+        from irisguard.artifact_manager import ArtifactManager
+
+        ArtifactManager().backup(checkpoint_path)
     set_seed(CFG.seed)
-    device = get_device()
-    if device.type == "cpu":
-        optimize_cpu_runtime(16)
-    print(f"Device: {device}")
+    device = torch_device(hardware)
+    print(f"Device: {device}; resource plan: {plan.to_dict()}")
 
     pre_dir = CFG.work_dir / "artifacts" / "preprocess"
     train_df = pd.read_csv(pre_dir / "train.csv")
@@ -272,8 +293,8 @@ def train_impl(out_dir: Path, epochs: int = None, batch_size: int = None, grad_a
         batch_size=batch_size,
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=device.type == "cuda",
-        drop_last=True,
+        pin_memory=plan.backend == "cuda",
+        drop_last=False,
         persistent_workers=num_workers > 0,
     )
     val_loader = DataLoader(
@@ -281,7 +302,7 @@ def train_impl(out_dir: Path, epochs: int = None, batch_size: int = None, grad_a
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=device.type == "cuda",
+        pin_memory=plan.backend == "cuda",
         persistent_workers=num_workers > 0,
     )
 
@@ -297,10 +318,11 @@ def train_impl(out_dir: Path, epochs: int = None, batch_size: int = None, grad_a
         label_smoothing=CFG.label_smoothing,
         pretrained=CFG.pretrained,
     ).to(device)
-    if CFG.channels_last:
+    use_channels_last = CFG.channels_last or plan.channels_last
+    if use_channels_last:
         model = model.to(memory_format=torch.channels_last)
 
-    use_amp = CFG.use_amp and device.type == "cuda"
+    use_amp = (CFG.use_amp or plan.use_mixed_precision) and device.type == "cuda"
     scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
     accum = max(1, grad_accum)
 
@@ -314,7 +336,8 @@ def train_impl(out_dir: Path, epochs: int = None, batch_size: int = None, grad_a
     )
     ema = EMA(model, decay=CFG.ema_decay)
 
-    best_acc = 0.0
+    best_acc = -1.0
+    epochs_without_improvement = 0
     history = []
 
     for epoch in range(1, epochs + 1):
@@ -336,7 +359,7 @@ def train_impl(out_dir: Path, epochs: int = None, batch_size: int = None, grad_a
         optimizer.zero_grad(set_to_none=True)
 
         for step, (images, labels) in enumerate(pbar):
-            if CFG.channels_last and device.type == "cuda":
+            if use_channels_last and device.type == "cuda":
                 images = images.contiguous(memory_format=torch.channels_last)
             images = images.to(device, non_blocking=True)
             labels = labels.to(device, non_blocking=True)
@@ -358,6 +381,19 @@ def train_impl(out_dir: Path, epochs: int = None, batch_size: int = None, grad_a
             running_loss += loss.item() * accum
             pbar.set_postfix(loss=f"{loss.item() * accum:.4f}")
 
+        pending_steps = len(train_loader) % accum
+        if pending_steps:
+            scaler.unscale_(optimizer)
+            correction = accum / pending_steps
+            for parameter in model.parameters():
+                if parameter.grad is not None:
+                    parameter.grad.mul_(correction)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), CFG.grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+            ema.update(model)
+
         scheduler.step()
         train_loss = running_loss / max(len(train_loader), 1)
 
@@ -371,20 +407,45 @@ def train_impl(out_dir: Path, epochs: int = None, batch_size: int = None, grad_a
 
         if val_acc > best_acc:
             best_acc = val_acc
-            torch.save(
-                {
-                    "epoch": epoch,
-                    "model": model.state_dict(),
-                    "ema": ema.shadow,
-                    "num_classes": num_classes,
-                    "embedding_dim": CFG.embedding_dim,
-                    "val_acc": val_acc,
-                    "arcface_s": CFG.arcface_s,
-                    "arcface_m": CFG.arcface_m,
-                },
-                out_dir / "best_model.pth",
+            import os
+            import tempfile
+
+            checkpoint_path = out_dir / "best_model.pth"
+            fd, temp_name = tempfile.mkstemp(
+                prefix=".best_model-", suffix=".pth.tmp", dir=out_dir
             )
+            os.close(fd)
+            try:
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model": model.state_dict(),
+                        "ema": ema.shadow,
+                        "num_classes": num_classes,
+                        "embedding_dim": CFG.embedding_dim,
+                        "val_acc": val_acc,
+                        "arcface_s": CFG.arcface_s,
+                        "arcface_m": CFG.arcface_m,
+                    },
+                    temp_name,
+                )
+                os.replace(temp_name, checkpoint_path)
+            except Exception:
+                if os.path.exists(temp_name):
+                    os.unlink(temp_name)
+                raise
             print(f"  >> saved best_model.pth  (val_acc={val_acc:.4%})")
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
+
+        if (
+            epoch > CFG.warmup_epochs
+            and early_stopping_patience > 0
+            and epochs_without_improvement >= early_stopping_patience
+        ):
+            print(f"Early stopping after {epoch} epochs without validation improvement.")
+            break
 
     save_json({"best_val_acc": best_acc, "history": history}, out_dir / "train_history.json")
     print(f"\nDone. Best val acc = {best_acc:.4%}")
@@ -395,15 +456,19 @@ def train_impl(out_dir: Path, epochs: int = None, batch_size: int = None, grad_a
 # ======================================================================
 @torch.no_grad()
 def embed_impl(out_dir: Path, batch_size: int = None, num_workers: int = None, tta: bool = True):
-    batch_size = batch_size or CFG.batch_size
-    num_workers = num_workers if num_workers is not None else CFG.num_workers
+    from config.hardware_config import configure_torch, resource_plan, torch_device
+
+    hardware = configure_torch()
+    plan = resource_plan(hardware)
+    batch_size = batch_size if batch_size is not None else plan.embedding_batch_size
+    num_workers = num_workers if num_workers is not None else plan.dataloader_workers
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    device = get_device()
+    device = torch_device(hardware)
     ckpt = torch.load(CFG.work_dir / "artifacts" / "train" / "best_model.pth", map_location="cpu")
     model = IrisEmbeddingNet(ckpt["num_classes"], ckpt["embedding_dim"], pretrained=False).to(device)
     model.load_state_dict(ckpt.get("ema", ckpt["model"]), strict=False)
-    if CFG.channels_last and device.type == "cuda":
+    if (CFG.channels_last or plan.channels_last) and device.type == "cuda":
         model = model.to(memory_format=torch.channels_last)
     model.eval()
     print(f"Loaded checkpoint (val_acc={ckpt['val_acc']:.4%})")
@@ -422,7 +487,7 @@ def embed_impl(out_dir: Path, batch_size: int = None, num_workers: int = None, t
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
-        pin_memory=device.type == "cuda",
+        pin_memory=plan.backend == "cuda",
     )
 
     embs, labels = [], []

@@ -6,12 +6,21 @@ The baseline remains useful for recognition, registration, verification, and eva
 
 The dataset and generated biometric artifacts are not included in this repository. Obtain CASIA-Iris-Thousand from its authorized source and follow its access and usage terms. Keep the dataset local; the repository ignores the `IrisSecure-Dataset/` folder.
 
-## Baseline setup
+## Windows laptop setup
+
+The Windows setup script creates a local virtual environment and lets pip install the PyTorch build appropriate for the platform. For a CPU-only installation, pass `-CpuOnly`:
+
+```powershell
+.\scripts\setup_windows.ps1
+.\scripts\setup_windows.ps1 -CpuOnly
+```
+
+For manual setup, install a compatible Python version, create a virtual environment, install PyTorch, then install the project requirements:
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate # Windows: .venv\Scripts\activate
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+.\.venv\Scripts\Activate.ps1
+pip install torch torchvision
 pip install -r requirements.txt
 ```
 
@@ -38,11 +47,11 @@ IrisSecure-Dataset/
             └── R/
 ```
 
-The loader searches for `IrisSecure-Dataset/` or `CASIA-Iris-Thousand/` and handles the nested layout. Left and right eyes are treated as separate identities. Do not rename or move the original image files. If the data is stored elsewhere, set `Config.data_root` in `config.py` to its actual subject-folder root.
+The loader searches for `IrisSecure-Dataset/` or `CASIA-Iris-Thousand/` and handles the nested layout. Left and right eyes are treated as separate identities. Do not rename or move the original image files. If the data is stored elsewhere, set `CFG.data_root` in `config/__init__.py` to its actual subject-folder root.
 
 Generate the dataset manifest and observed statistics without starting training:
 
-```bash
+```powershell
 python -c "from irisguard.dataset_inspector import write_manifest_and_statistics; print(write_manifest_and_statistics()[:2])"
 ```
 
@@ -52,11 +61,24 @@ This writes `data/processed/dataset_manifest.csv` and `data/processed/dataset_st
 
 After setting up the dataset, start the training and evaluation pipeline:
 
-```bash
+```powershell
 python pipeline.py
 ```
 
 This runs five cached stages in order: clean → preprocess → train → embed → evaluate.
+
+## IrisGuard laptop workflow
+
+The normal app startup does not train or process the dataset. The pipeline detects available CPU/GPU backends and memory, then selects batch size, gradient accumulation, and loader workers. On Windows, use the explicit one-time workflow documented in [docs/train_once_workflow.md](docs/train_once_workflow.md); hardware selection and benchmark limitations are in [docs/hardware_requirements.md](docs/hardware_requirements.md). The dataset, embeddings, checkpoints, and biometric templates are local-only and ignored by Git.
+
+```powershell
+.\scripts\run_training.ps1
+.\scripts\run_embeddings.ps1
+.\scripts\run_calibration.ps1
+.\scripts\run_app.ps1
+```
+
+Training reuses the already-prepared checkpoint when it validates. To explicitly permit CPU training if no valid checkpoint exists, run `.\scripts\run_training.ps1 -ApproveTraining`.
 
 ## IrisGuard research experiments
 
@@ -77,12 +99,12 @@ The simulator is intentionally synthetic and is designed to study poisoning dyna
 
 ## Useful commands
 
-```bash
+```powershell
 python pipeline.py --status
 python pipeline.py --only train
 python pipeline.py --from train
 python pipeline.py --force
-python pipeline.py --max_classes 800 --epochs 10
+python pipeline.py --max_classes 200 --epochs 8
 python register.py --user_id alice_L --image data/CASIA-Iris-Thousand/000/L/S5000L00.jpg --eye L
 python verify.py --image data/CASIA-Iris-Thousand/000/L/S5000L01.jpg --against alice_L
 python verify.py --image data/CASIA-Iris-Thousand/000/L/S5000L02.jpg --identify --top_k 5

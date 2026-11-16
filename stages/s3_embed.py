@@ -3,6 +3,7 @@ from pathlib import Path
 from config import CFG
 from src.caching import hash_file, hash_obj, stage
 from src.stages_impl import embed_impl
+from config.hardware_config import detect_hardware, resource_plan
 
 
 def _artifacts() -> Path:
@@ -19,7 +20,11 @@ def _inputs_hash() -> str:
     return (
         hash_file(tr / "best_model.pth")
         + ":"
-        + hash_obj({"image_size": CFG.image_size, "embedding_dim": CFG.embedding_dim})
+        + hash_obj({
+            "image_size": CFG.image_size,
+            "embedding_dim": CFG.embedding_dim,
+            "resource_plan": resource_plan(detect_hardware()).to_dict(),
+        })
         + ":"
         + hash_file(pre / "train.csv")
         + ":"

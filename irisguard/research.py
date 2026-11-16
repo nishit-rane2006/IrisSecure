@@ -111,9 +111,9 @@ def run_attack_scenarios(seed: int = 42) -> Dict[str, Dict[str, float] | List[At
     return results
 
 
-def run_experiment_suite() -> Dict[str, object]:
+def run_experiment_suite(seed: int = 42) -> Dict[str, object]:
     """Run the synthetic research evaluation for policy comparisons."""
-    base = np.random.default_rng(7).normal(0.0, 1.0, size=512)
+    base = np.random.default_rng(seed + 7).normal(0.0, 1.0, size=512)
     base = _normalize(base)
 
     experiment = {}
@@ -125,8 +125,8 @@ def run_experiment_suite() -> Dict[str, object]:
     }
 
     scenarios = {
-        "legitimate": _generate_legitimate_sequence(base, steps=6, noise_scale=0.05, rng=np.random.default_rng(9)),
-        "gradual_poisoning": _generate_poisoning_sequence(base, steps=8, drift_magnitude=0.35, rng=np.random.default_rng(10)),
+        "legitimate": _generate_legitimate_sequence(base, steps=6, noise_scale=0.05, rng=np.random.default_rng(seed + 9)),
+        "gradual_poisoning": _generate_poisoning_sequence(base, steps=8, drift_magnitude=0.35, rng=np.random.default_rng(seed + 10)),
     }
 
     for policy_name, policy in policies.items():
@@ -150,7 +150,11 @@ def run_experiment_suite() -> Dict[str, object]:
                 summary["poison_drift"] = float(drift)
         experiment[policy_name] = summary
 
-    return {"base_embedding_norm": float(np.linalg.norm(base)), "policies": experiment, "attack_summary": run_attack_scenarios()}
+    return {
+        "base_embedding_norm": float(np.linalg.norm(base)),
+        "policies": experiment,
+        "attack_summary": run_attack_scenarios(seed),
+    }
 
 
 if __name__ == "__main__":

@@ -125,6 +125,7 @@ class AFSDD:
             "temporal_drift": float(temporal_drift),
             "cumulative_drift": float(cumulative_drift),
             "quality_penalty": float(quality_penalty),
+            "quality_score": float(quality),
             "intra_class_excess": float(max(deviation_from_mean, temporal_from_mean)),
             "ewma_temporal": float(ewma_step),
             "ewma_cumulative": float(ewma_drift),
@@ -133,12 +134,22 @@ class AFSDD:
 
     def decide(self, score_dict: Dict[str, float]) -> str:
         score = float(score_dict["anomaly_score"])
+        if self.locked:
+            return "LOCK"
+        if score >= self.config.lock_threshold:
+            self.locked = True
+            return "LOCK"
+        if score_dict.get("quality_score", 1.0) < self.config.quality_min:
+            return "REVIEW"
         if score >= self.config.reject_threshold:
             return "REJECT"
         if score >= self.config.review_threshold:
+            self.reviews += 1
+            if self.reviews >= self.config.lock_review_count:
+                self.locked = True
+                return "LOCK"
             return "REVIEW"
-        if self.locked and self.reviews >= self.config.lock_review_count:
-            return "LOCK"
+        self.reviews = max(0, self.reviews - 1)
         return "ACCEPT"
 
     def record_decision(self, verdict: str):
@@ -157,5 +168,6 @@ class AFSDD:
             "temporal_drift": score_dict["temporal_drift"],
             "cumulative_drift": score_dict["cumulative_drift"],
             "quality_penalty": score_dict["quality_penalty"],
+            "quality_score": score_dict.get("quality_score", 1.0),
             "intra_class_excess": score_dict["intra_class_excess"],
         }

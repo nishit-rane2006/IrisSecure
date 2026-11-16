@@ -3,6 +3,7 @@ from pathlib import Path
 from config import CFG
 from src.caching import hash_file, hash_obj, stage
 from src.stages_impl import train_impl
+from config.hardware_config import detect_hardware, resource_plan
 
 
 def _artifacts() -> Path:
@@ -27,6 +28,8 @@ def _inputs_hash() -> str:
         "seed": CFG.seed,
         "max_classes": CFG.max_classes,
         "warmup_epochs": CFG.warmup_epochs,
+        "early_stopping_patience": CFG.early_stopping_patience,
+        "resource_plan": resource_plan(detect_hardware()).to_dict(),
     }
     return (
         hash_obj(cfg_sig)
@@ -38,7 +41,14 @@ def _inputs_hash() -> str:
 
 
 @stage("train", inputs_fn=_inputs_hash, outputs_fn=_outputs)
-def run_train(epochs=None, batch_size=None, grad_accum=None, num_workers=None, max_classes=None):
+def run_train(
+    epochs=None,
+    batch_size=None,
+    grad_accum=None,
+    num_workers=None,
+    max_classes=None,
+    early_stopping_patience=None,
+):
     train_impl(
         _artifacts(),
         epochs=epochs,
@@ -46,4 +56,5 @@ def run_train(epochs=None, batch_size=None, grad_accum=None, num_workers=None, m
         grad_accum=grad_accum,
         num_workers=num_workers,
         max_classes=max_classes,
+        early_stopping_patience=early_stopping_patience,
     )

@@ -58,9 +58,12 @@ def discover_dataset_root(start_roots: Optional[Iterable[Path]] = None) -> Optio
 
 
 def _image_quality(gray: "cv2.Mat") -> float:
-    lap = cv2.Laplacian(gray, cv2.CV_64F)
-    score = float(lap.var())
-    return float(min(1.0, max(0.0, score / 400.0)))
+    gray = cv2.resize(gray, (224, 224), interpolation=cv2.INTER_AREA)
+    sharpness = min(1.0, float(cv2.Laplacian(gray, cv2.CV_64F).var()) / 400.0)
+    contrast = min(1.0, float(gray.std()) / 64.0)
+    illumination = float(gray.mean())
+    illumination_score = max(0.0, 1.0 - abs(illumination - 127.5) / 127.5)
+    return float(max(0.0, min(1.0, 0.45 * sharpness + 0.35 * contrast + 0.20 * illumination_score)))
 
 
 def inspect_dataset(dataset_root: Optional[Path] = None) -> Tuple[pd.DataFrame, Dict[str, object]]:

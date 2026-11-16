@@ -10,6 +10,7 @@ import torch
 import torch.nn.functional as F
 
 from config import CFG
+from irisguard.artifact_manager import ArtifactError, ArtifactManager
 from src.dataset import build_eval_transform, preprocess_iris
 from src.model import IrisEmbeddingNet
 from src.security import apply_projection, decrypt_embedding, derive_key, encrypt_embedding, random_orthogonal
@@ -19,13 +20,24 @@ GALLERY_PATH = CFG.db_dir / "gallery.pkl"
 
 
 def load_model(device):
-    ckpt_path = CFG.work_dir / "artifacts" / "train" / "best_model.pth"
-    if not ckpt_path.exists():
-        raise SystemExit("No trained model found. Run `python pipeline.py` first.")
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+    manager = ArtifactManager()
+    try:
+        ckpt_path = manager.validate("model")
+    except ArtifactError as exc:
+        raise SystemExit(
+            f"{exc}\nPrepare or adopt a checkpoint with `python .\\scripts\\train_once.py`."
+        ) from exc
+
+    ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+    if int(ckpt.get("embedding_dim", -1)) != CFG.embedding_dim:
+        raise ArtifactError(
+            f"Checkpoint embedding dimension is incompatible: {ckpt.get('embedding_dim')} != {CFG.embedding_dim}."
+        )
+    if not ckpt.get("ema") and not ckpt.get("model"):
+        raise ArtifactError(f"Checkpoint has no model weights: {ckpt_path}")
     model = IrisEmbeddingNet(ckpt["num_classes"], ckpt["embedding_dim"], pretrained=False).to(device)
     model.load_state_dict(ckpt.get("ema", ckpt["model"]), strict=False)
-    if CFG.channels_last and device.type == "cuda":
+    if CFG.channels_last and device.type in {"cuda", "xpu"}:
         model = model.to(memory_format=torch.channels_last)
     model.eval()
     return model
@@ -44,7 +56,7 @@ def save_gallery(g):
         pickle.dump(g, f)
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def embed_image(model, device, image_path: Path, tta: bool = True) -> np.ndarray:
     img = cv2.imread(str(image_path), cv2.IMREAD_GRAYSCALE)
     if img is None:

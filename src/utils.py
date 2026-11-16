@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from config.hardware_config import configure_torch, detect_hardware, torch_device
+
 
 def set_seed(seed: int = 42):
     random.seed(seed)
@@ -19,12 +21,18 @@ def set_seed(seed: int = 42):
 
 
 def get_device() -> torch.device:
-    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    hardware = configure_torch()
+    return torch_device(hardware)
 
 
-def optimize_cpu_runtime(num_threads: int = 16):
+def optimize_cpu_runtime(num_threads: int = 4):
+    hardware = detect_hardware()
+    num_threads = min(max(1, num_threads), hardware.logical_processors)
     torch.set_num_threads(num_threads)
-    torch.set_num_interop_threads(max(1, num_threads // 2))
+    try:
+        torch.set_num_interop_threads(max(1, min(2, num_threads)))
+    except RuntimeError:
+        pass
     os.environ.setdefault("OMP_NUM_THREADS", str(num_threads))
     os.environ.setdefault("MKL_NUM_THREADS", str(num_threads))
     try:
@@ -59,9 +67,20 @@ class EMA:
 
 
 def save_json(obj, path: Path):
+    import tempfile
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(obj, f, indent=2, default=str)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.stem}-", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(obj, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+        raise
 
 
 def load_json(path: Path):

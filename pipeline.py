@@ -4,12 +4,15 @@ import sys
 import time
 
 from config import CFG
+from config.hardware_config import configure_torch, resource_plan
 from src.caching import load_hash_index, load_manifest
 
 from stages.s0_clean import run_clean
 from stages.s1_preprocess import run_preprocess
 from stages.s2_train import run_train
+from stages.s2_train import _inputs_hash as train_inputs_hash
 from stages.s3_embed import run_embed
+from stages.s3_embed import _inputs_hash as embed_inputs_hash
 from stages.s4_evaluate import run_evaluate
 
 
@@ -19,7 +22,14 @@ STAGES = [
     (
         "train",
         run_train,
-        {"epochs": None, "batch_size": None, "grad_accum": None, "num_workers": None, "max_classes": None},
+        {
+            "epochs": None,
+            "batch_size": None,
+            "grad_accum": None,
+            "num_workers": None,
+            "max_classes": None,
+            "early_stopping_patience": None,
+        },
     ),
     ("embed", run_embed, {"batch_size": None, "num_workers": None}),
     ("evaluate", run_evaluate, {"split": "test", "max_impostor": None}),
@@ -28,11 +38,16 @@ STAGES = [
 
 def show_status():
     idx = load_hash_index()
+    current_hashes = {
+        "train": train_inputs_hash(),
+        "embed": embed_inputs_hash(),
+    }
     print(f"\n{'Stage':12s} {'Status':10s} {'Hash':18s} {'Duration':>10s}")
     print("-" * 60)
     for name, _, _ in STAGES:
         m = load_manifest(name)
-        if m and idx.get(name) == m.get("input_hash"):
+        expected_hash = current_hashes.get(name, idx.get(name))
+        if m and idx.get(name) == m.get("input_hash") == expected_hash:
             print(f"{name:12s} {'cached':10s} {m['input_hash']:18s} {m.get('duration', 0):>9.1f}s")
         elif m:
             print(f"{name:12s} {'stale':10s} {m['input_hash']:18s} {'':>10s}")
@@ -52,9 +67,12 @@ def main():
     ap.add_argument("--grad_accum", type=int, default=None)
     ap.add_argument("--num_workers", type=int, default=None)
     ap.add_argument("--max_classes", type=int, default=None)
+    ap.add_argument("--early_stopping_patience", type=int, default=None)
     args = ap.parse_args()
 
     CFG.ensure_dirs()
+    hardware = configure_torch()
+    print(f"Detected runtime resources: {resource_plan(hardware).to_dict()}")
 
     if args.status:
         show_status()
@@ -83,6 +101,8 @@ def main():
         overrides["num_workers"] = args.num_workers
     if args.max_classes is not None:
         overrides["max_classes"] = args.max_classes
+    if args.early_stopping_patience is not None:
+        overrides["early_stopping_patience"] = args.early_stopping_patience
 
     t0 = time.time()
     results = []
